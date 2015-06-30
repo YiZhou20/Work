@@ -1,0 +1,66 @@
+create or replace 
+PROCEDURE LINK_UNZIP
+(
+p_boundingpolygon in sdo_geometry,
+p_nid in number,
+v_result out number
+
+) AS
+v_newNodeId number;
+
+  --Create a cursor to iterate through the selected nodes in the polygon
+    CURSOR node_cursor IS
+      SELECT * FROM NODES
+      WHERE network_id = p_nid AND sdo_inside(geom, p_boundingpolygon) = 'TRUE';
+
+BEGIN
+
+  --Iterate through the nodes
+  FOR node_rec IN node_cursor
+  LOOP
+ 
+    SELECT seq_node_id.nextval INTO v_newNodeId FROM dual;
+ 
+    -- Insert a new node at the exact position as the old one
+    INSERT INTO nodes
+                (id,
+                network_id,
+                geom,
+                node_type,
+                node_name,
+                in_synch)
+    SELECT v_newNodeId,
+              network_id,
+              geom,
+              7,
+              node_name,
+              in_synch
+      FROM nodes
+      WHERE id = node_rec.id AND network_id = p_nid;
+     
+      -- Set begin node of link with positive id to new node
+      UPDATE links al
+      SET al.beg_node_id = v_newNodeId
+      WHERE al.network_id = p_nid
+        AND al.beg_node_id = node_rec.id
+        AND al.id > 0;
+       
+      -- Set end node of link with positive id to new node
+      UPDATE links al
+      SET al.end_node_id = v_newNodeId
+      WHERE al.network_id = p_nid
+        AND al.end_node_id = node_rec.id
+        AND al.id > 0;
+ 
+      -- Update the offsets of the affected links
+      UPDATE links s
+      SET s.VIS_OFFSET = -2
+      WHERE s.network_id = p_nid
+      AND s.id IN (
+        SELECT t.id FROM links t WHERE sdo_anyinteract(t.geom, p_boundingpolygon)='TRUE'
+        AND t.network_id = p_nid
+      );
+
+  END LOOP;
+   
+END LINK_UNZIP;

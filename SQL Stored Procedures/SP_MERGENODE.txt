@@ -1,0 +1,175 @@
+create or replace 
+PROCEDURE SP_MERGENODE 
+(
+p_boundingpolygon in sdo_geometry,
+p_nid in number,
+p_nodeName in varchar2 default null,
+v_result out number
+
+) AS 
+v_newNode sdo_geometry;
+v_nodeToMerge number;
+v_newNodeId number;
+
+
+BEGIN
+
+--==## Step 1 ##==--
+-- Select nodes in a polygon and keep as nodeList
+
+  INSERT INTO NODEHOLDER
+  (NODEID
+  )
+  SELECT ID
+  FROM NODES 
+  where network_id = p_nid and sdo_inside(geom, p_boundingpolygon) = 'TRUE';
+  
+--==## Step 2 ##==--
+-- Add any link and its node directly attached that's not in the network
+
+  Insert into LINKHOLDER
+  (LINKID)
+  Select distinct(ID) from links
+    where network_id = 100001
+    and (beg_node_id in (select NODEID from NODEHOLDER) or end_node_id in (select NODEID from NODEHOLDER))
+    and id not in (
+      select id from links where network_id = p_nid);
+      
+  INSERT
+INTO LINKS
+  (
+    ID,
+    SOURCE_LINK,
+    NETWORK_ID,
+    BEG_NODE_ID,
+    END_NODE_ID,
+    GEOM,
+    LENGTH,
+    LINK_NAME,
+    LANE_COUNT,
+    VIS_OFFSET,
+    LINK_TYPE,
+    SPEED_LIMIT,
+    DETAIL_LEVEL,
+    IN_SYNCH
+  )
+  Select ID,
+  source_link,
+  p_nid,
+  beg_node_id,
+  end_node_id,
+  geom,
+  length,
+  link_name,
+  lane_count,
+  vis_offset,
+  link_type,
+  speed_limit,
+  detail_level,
+  in_synch from links where network_id = 100001 and id in (select LINKID from LINKHOLDER);
+  
+  INSERT INTO NEWNODES
+  (NODEID)
+  select distinct(ID) from nodes
+  where network_id = 100001
+  and (id in (select beg_node_id from links where network_id = p_nid and ID in (select LINKID from LINKHOLDER))
+    or id in (select end_node_id from links where network_id = p_nid and ID in (select LINKID from LINKHOLDER)))
+  and id not in (select ID from nodes where network_id = p_nid);
+  
+  INSERT
+INTO NODES
+  (
+    ID,
+    NETWORK_ID,
+    GEOM,
+    NODE_TYPE,
+    NODE_NAME,
+    IN_SYNCH
+  )
+    select ID,
+    p_nid,
+    geom,
+    node_type,
+    node_name,
+    in_synch
+    from nodes where network_id = 100001 and id in (select NODEID from NEWNODES);
+
+
+--==## Step 3 ##==--  
+-- find the center of nodes to be merged
+-- make a new node at that center, centerNode
+-- set node type to 3 (signalized intersection)
+
+  
+  SELECT nodeid INTO v_nodeToMerge
+  FROM nodeholder WHERE ROWNUM <= 1;
+  
+  SELECT SDO_AGGR_CENTROID(SDOAGGRTYPE(an.geom, 0.000000000001)) INTO v_newnode
+  FROM   nodes an
+  WHERE  id IN ( SELECT nodeid
+  FROM NODEHOLDER);
+
+  SELECT seq_node_id.nextval INTO v_newNodeId FROM dual;
+
+  INSERT INTO NODES
+            (id, 
+             network_id, 
+             geom, 
+             node_type, 
+             node_name, 
+             in_synch) 
+  SELECT v_newNodeId, 
+       network_id, 
+       v_newNode, 
+       3, 
+       p_nodename, 
+       in_synch 
+  FROM   nodes
+  WHERE  id = v_nodetomerge and network_id = p_nid;
+
+--==## Step 4 ##==--
+-- Find links that have *BOTH* begin and end nodes in nodeList and delete
+
+  DELETE
+  FROM links al
+  WHERE al.network_id = p_nid
+  AND al.beg_node_id IN
+    (SELECT NODEID
+     FROM NODEHOLDER)
+  AND al.end_node_id IN
+    (SELECT NODEID
+     FROM NODEHOLDER);
+
+--==## Step 5 ##==--
+-- Find links that are connected to nodes in nodeList
+-- Replace begin node with centerNode
+-- Replace end node with centerNode
+  
+  UPDATE links al
+  SET    al.beg_node_id = v_newNodeId
+   WHERE  al.network_id = p_nid 
+       AND al.beg_node_id IN
+       (SELECT NODEID
+        FROM NODEHOLDER);
+	   
+  UPDATE links al
+  SET    al.END_NODE_ID = v_newNodeId
+  WHERE  al.network_id = p_nid 
+       AND al.END_NODE_ID IN
+       (SELECT NODEID
+        FROM NODEHOLDER);
+  
+--==## Step 6 ##==--
+-- Delete nodes in nodeList
+-- Clear temporary holders
+
+  DELETE FROM nodes an 
+  WHERE  network_id = p_nid
+  AND an.id IN (SELECT NODEID FROM NODEHOLDER);  
+  
+  DELETE FROM nodeholder;
+  DELETE FROM LINKHOLDER;
+  DELETE FROM NEWNODES;
+
+
+END SP_MERGENODE;

@@ -1,0 +1,226 @@
+create or replace 
+PROCEDURE SP_ADD_TURNBAY
+
+(
+p_lid in number,
+p_nid in number,
+p_turnBayLength in number,
+p_turnType in number, -- 13 for left turnbay, 14 for right turnbay
+p_turnLC in number,
+P_thruLC in number,
+p_mainlineLC in number,
+v_result out number
+
+)
+AS 
+
+v_beginNodeId number;
+v_endNodeId number;
+v_newNode sdo_geometry;
+v_newNodeId number;
+v_mainlineLinkId number;
+v_thruLinkId number;
+v_turnLinkId number;
+v_link_lrs sdo_geometry;
+v_link_length number;
+v_ml_link sdo_geometry;
+v_turn_link sdo_geometry;
+v_visOffset number;
+
+BEGIN
+
+-- geometry of mainline link and turnbay link
+  select SDO_LRS.CONVERT_TO_LRS_GEOM(geom)
+  into v_link_lrs
+  from links where network_id = p_nid and id = p_lid;
+  
+  select length
+  into v_link_length
+  from links where network_id = p_nid and id = p_lid;
+  
+  v_ml_link := SDO_LRS.CONVERT_TO_STD_GEOM(sdo_lrs.dynamic_segment(v_link_lrs,0,v_link_length - p_turnBayLength,0.05));
+  v_turn_link := SDO_LRS.CONVERT_TO_STD_GEOM(sdo_lrs.dynamic_segment(v_link_lrs,v_link_length - p_turnBayLength,v_link_length,0.05));
+
+
+-- Get begin and end nodes
+  SELECT BEG_NODE_ID INTO v_beginNodeId
+  FROM LINKS WHERE ID = p_lid AND network_id = p_nid;
+  
+  SELECT END_NODE_ID INTO v_endNodeId
+  FROM LINKS WHERE ID = p_lid AND network_id = p_nid;
+
+
+-- Position of the new node
+  SELECT
+  SDO_LRS.CONVERT_TO_STD_GEOM(
+     Sdo_Lrs.Locate_Pt(
+       sdo_lrs.convert_to_lrs_geom(geom,0.0,sdo_geom.sdo_length(geom,0.05)),
+           sdo_geom.sdo_length(geom,0.05)- p_turnBayLength,0) ) INTO v_newNode
+  FROM LINKS WHERE network_id = p_nid and id = p_lid;
+
+-- Insert new node
+  SELECT seq_node_id.nextval INTO v_newNodeId FROM dual;
+  INSERT INTO NODES
+            (id, 
+             network_id, 
+             geom, 
+             node_type, 
+             node_name, 
+             in_synch) 
+  SELECT v_newNodeId, 
+       network_id, 
+       v_newNode, 
+       7, 
+       node_name, 
+       in_synch 
+  FROM nodes WHERE id = v_beginNodeId and network_id = p_nid;
+
+  
+-- Generate new links
+  IF p_lid > 0 THEN
+    SELECT SEQ_LINK_ID.nextval INTO v_mainlineLinkId FROM dual;
+    SELECT SEQ_LINK_ID.nextval INTO v_thruLinkId FROM dual;
+    SELECT SEQ_LINK_ID.nextval INTO v_turnLinkId FROM dual;
+  ELSE
+    SELECT SEQ_NEG_LINK_ID.nextval INTO v_mainlineLinkId FROM dual;
+    SELECT SEQ_NEG_LINK_ID.nextval INTO v_thruLinkId FROM dual;
+    SELECT SEQ_NEG_LINK_ID.nextval INTO v_turnLinkId FROM dual;
+  END IF;
+
+  INSERT INTO LINKS -- mainline/midblock link
+  (
+    ID,
+    SOURCE_LINK,
+    NETWORK_ID,
+    BEG_NODE_ID,
+    END_NODE_ID,
+    GEOM,
+    LENGTH,
+    LINK_NAME,
+    LANE_COUNT,
+    VIS_OFFSET,
+    LINK_TYPE,
+    SPEED_LIMIT,
+    DETAIL_LEVEL,
+    IN_SYNCH,
+    CREATED,
+    MODIFIED,
+    CREATED_BY,
+    MODIFIED_BY,
+    MODSTAMP
+  )SELECT v_mainlineLinkId,
+  p_lid,
+  NETWORK_ID,
+  v_beginNodeId,
+  v_newNodeId,
+  v_ml_link,
+  v_link_length - p_turnBayLength,
+  LINK_NAME,
+  p_mainlineLC,
+  -2,
+  LINK_TYPE,
+  SPEED_LIMIT,
+  DETAIL_LEVEL,
+  IN_SYNCH,
+  CREATED,
+  MODIFIED,
+  CREATED_BY,
+  MODIFIED_BY,
+  MODSTAMP
+  FROM LINKS WHERE ID = p_lid AND network_id = p_nid;
+  
+  INSERT INTO LINKS -- through link
+  (
+    ID,
+    SOURCE_LINK,
+    NETWORK_ID,
+    BEG_NODE_ID,
+    END_NODE_ID,
+    GEOM,
+    LENGTH,
+    LINK_NAME,
+    LANE_COUNT,
+    VIS_OFFSET,
+    LINK_TYPE,
+    SPEED_LIMIT,
+    DETAIL_LEVEL,
+    IN_SYNCH,
+    CREATED,
+    MODIFIED,
+    CREATED_BY,
+    MODIFIED_BY,
+    MODSTAMP
+  )SELECT v_thruLinkId,
+  p_lid,
+  NETWORK_ID,
+  v_newNodeId,
+  v_endNodeId,
+  v_turn_link,
+  p_turnBayLength,
+  LINK_NAME,
+  p_thruLC,
+  -2,
+  LINK_TYPE,
+  SPEED_LIMIT,
+  DETAIL_LEVEL,
+  IN_SYNCH,
+  CREATED,
+  MODIFIED,
+  CREATED_BY,
+  MODIFIED_BY,
+  MODSTAMP
+  FROM LINKS WHERE ID = p_lid AND network_id = p_nid;
+  
+-- turn bay link
+  IF p_turnType = 13 then
+    v_visOffset := 1;
+  else v_visOffset := -1;
+  end if;
+
+  INSERT INTO LINKS
+  (
+    ID,
+    SOURCE_LINK,
+    NETWORK_ID,
+    BEG_NODE_ID,
+    END_NODE_ID,
+    GEOM,
+    LENGTH,
+    LINK_NAME,
+    LANE_COUNT,
+    VIS_OFFSET,
+    LINK_TYPE,
+    SPEED_LIMIT,
+    DETAIL_LEVEL,
+    IN_SYNCH,
+    CREATED,
+    MODIFIED,
+    CREATED_BY,
+    MODIFIED_BY,
+    MODSTAMP
+  )SELECT v_turnLinkId,
+  p_lid,
+  NETWORK_ID,
+  v_newNodeId,
+  v_endNodeId,
+  v_turn_link,
+  p_turnBayLength,
+  LINK_NAME,
+  p_turnLC,
+  -2 + v_visOffset,
+  p_turnType,
+  SPEED_LIMIT,
+  DETAIL_LEVEL,
+  IN_SYNCH,
+  CREATED,
+  MODIFIED,
+  CREATED_BY,
+  MODIFIED_BY,
+  MODSTAMP
+  FROM LINKS WHERE ID = p_lid AND network_id = p_nid;
+  
+-- Delete old link
+  DELETE FROM LINKS WHERE ID = p_lid AND network_id = p_nid;
+
+
+END SP_ADD_TURNBAY;

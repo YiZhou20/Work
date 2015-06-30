@@ -1,0 +1,105 @@
+create or replace 
+PROCEDURE SP_GETLINK 
+(
+p_boundingpolygon in sdo_geometry,
+p_nid in number,
+p_nodeName in varchar2 default null,
+v_result out number
+)
+AS 
+
+v_intNode number;
+
+BEGIN
+
+--==## Step 1 ##==--
+-- Select the node in the polygon
+
+  SELECT ID into v_intNode
+  FROM NODES 
+  where network_id = p_nid and sdo_inside(geom, p_boundingpolygon) = 'TRUE';
+  
+--==## Step 2 ##==--
+-- Add any link and its node directly attached that's not in the network
+
+  Insert into LINKHOLDER
+  (LINKID)
+  Select distinct(ID) from links
+    where network_id = 100001
+    and (beg_node_id = v_intNode or end_node_id = v_intNode)
+    and id not in (
+      select id from links where network_id = p_nid);
+      
+  INSERT
+INTO LINKS
+  (
+    ID,
+    SOURCE_LINK,
+    NETWORK_ID,
+    BEG_NODE_ID,
+    END_NODE_ID,
+    GEOM,
+    LENGTH,
+    LINK_NAME,
+    LANE_COUNT,
+    VIS_OFFSET,
+    LINK_TYPE,
+    SPEED_LIMIT,
+    DETAIL_LEVEL,
+    IN_SYNCH
+  )
+  Select ID,
+  source_link,
+  p_nid,
+  beg_node_id,
+  end_node_id,
+  geom,
+  length,
+  link_name,
+  lane_count,
+  vis_offset,
+  link_type,
+  speed_limit,
+  detail_level,
+  in_synch from links where network_id = 100001 and id in (select LINKID from LINKHOLDER);
+  
+  INSERT INTO NEWNODES
+  (NODEID)
+  select distinct(ID) from nodes
+  where network_id = 100001
+  and (id in (select beg_node_id from links where network_id = p_nid and ID in (select LINKID from LINKHOLDER))
+    or id in (select end_node_id from links where network_id = p_nid and ID in (select LINKID from LINKHOLDER)))
+  and id not in (select ID from nodes where network_id = p_nid);
+  
+  INSERT
+INTO NODES
+  (
+    ID,
+    NETWORK_ID,
+    GEOM,
+    NODE_TYPE,
+    NODE_NAME,
+    IN_SYNCH
+  )
+    select ID,
+    p_nid,
+    geom,
+    node_type,
+    node_name,
+    in_synch
+    from nodes where network_id = 100001 and id in (select NODEID from NEWNODES);
+
+--==## Step 3 ##==--
+-- Update node type of the intersection node
+-- Clear temporary holders
+
+update nodes
+set node_type = 3 where network_id = p_nid and id = v_intNode;
+
+update nodes
+set node_name = p_nodeName where network_id = p_nid and id = v_intNode;
+
+  DELETE FROM LINKHOLDER;
+  DELETE FROM NEWNODES;
+
+END SP_GETLINK;

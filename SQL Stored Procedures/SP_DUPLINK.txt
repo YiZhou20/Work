@@ -1,0 +1,80 @@
+create or replace 
+PROCEDURE SP_DUPLINK
+
+(
+p_lid in number, -- link id
+p_nid in number, -- network id
+p_turnType in number, -- 13 for left turnbay, 14 for right turnbay
+p_turnLC in number, -- turnbay lane count
+p_thruLC in number, -- midblock lane count
+v_result out number
+)
+
+AS 
+
+v_turnLinkId number;
+v_visOffset number;
+
+BEGIN
+  
+  if p_lid > 0 then
+    select SEQ_LINK_ID.nextval INTO v_turnLinkId FROM dual;
+  else SELECT SEQ_NEG_LINK_ID.nextval INTO v_turnLinkId FROM dual;
+  end if;
+  
+IF p_turnType = 13 then
+  v_visOffset := 1;
+else v_visOffset := -1;
+end if;
+
+-- Duplicate out a turnbay link  
+  INSERT INTO LINKS
+  (
+    ID,
+    SOURCE_LINK,
+    NETWORK_ID,
+    BEG_NODE_ID,
+    END_NODE_ID,
+    GEOM,
+    LENGTH,
+    LINK_NAME,
+    LANE_COUNT,
+    VIS_OFFSET,
+    LINK_TYPE,
+    SPEED_LIMIT,
+    DETAIL_LEVEL,
+    IN_SYNCH,
+    CREATED,
+    MODIFIED,
+    CREATED_BY,
+    MODIFIED_BY,
+    MODSTAMP
+  )
+  SELECT v_turnLinkId,
+  p_lid,
+  NETWORK_ID,
+  BEG_NODE_ID,
+  END_NODE_ID,
+  GEOM,
+  LENGTH,
+  LINK_NAME,
+  p_turnLC,
+  VIS_OFFSET+v_visOffset,
+  p_turnType,
+  SPEED_LIMIT,
+  DETAIL_LEVEL,
+  IN_SYNCH,
+  CREATED,
+  MODIFIED,
+  CREATED_BY,
+  MODIFIED_BY,
+  MODSTAMP
+FROM LINKS where id = p_lid and network_id = p_nid;
+
+-- Update lane count on the original link
+update links
+set lane_count = p_thruLC where id = p_lid and network_id = p_nid;  
+  
+  
+  
+END SP_DUPLINK;
